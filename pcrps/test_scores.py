@@ -1,7 +1,6 @@
 """
 Script to compute block permutation test p-values for score differences.
 """
-
 from absl import app
 from absl import flags
 import numpy as np
@@ -49,7 +48,6 @@ SEED = flags.DEFINE_integer(
     42,
     help='Global RNG seed.',
 )
-
 
 def block_permutation_test(
     score_a: np.ndarray,
@@ -116,7 +114,6 @@ def block_permutation_test(
     p = (n_lt + 0.5 * n_eq + 0.5) / (b + 1)
 
     return np.float32(p)
-
 
 def block_permutation_test_dataset(
     ds_a: xr.Dataset,
@@ -211,13 +208,13 @@ def is_lower_tail_threshold(label: str) -> bool:
         return int(label[1:]) < 50
     return False
 
-
-def prepare_score_dataset(ds: xr.Dataset, variables: list[str]) -> xr.Dataset:    
+def prepare_score_dataset(ds: xr.Dataset, variables: list[str]) -> xr.Dataset:
     """
     Prepare score variables for permutation testing.
 
-    For variables with a ``threshold`` dimension, lower-tail thresholds are constructed as PCRPS minus the upper twPCRPS. 
-    For variables with a ``quantile`` dimension, lower-tail quantiles are constructed analogously. 
+    Monthly record scores are stored directly for their relevant tails.
+    Lower-tail fixed-threshold scores are constructed as PCRPS minus the upper twPCRPS.
+    For variables with a ``quantile`` dimension, lower-tail quantiles are constructed analogously.
     All other variables are passed through unchanged.
 
     Parameters
@@ -238,20 +235,27 @@ def prepare_score_dataset(ds: xr.Dataset, variables: list[str]) -> xr.Dataset:
         da = ds[var]
 
         if 'threshold' in da.dims:
-            pcrps_var = var.replace('_tw_pcrps', '_pcrps')
-            if pcrps_var not in ds:
-                raise ValueError(
-                    f'Variable {var} requires {pcrps_var} in the same dataset.'
-                )
-
+            # Monthly minima already contain lower-tail scores.
             lower_mask = xr.DataArray(
-                np.array([is_lower_tail_threshold(str(t)) for t in da.threshold.values]),
+                np.array([
+                    str(t) != 'monthly_min' and is_lower_tail_threshold(str(t))
+                    for t in da.threshold.values
+                ]),
                 dims=('threshold',),
                 coords={'threshold': da.threshold},
             )
 
-            pcrps_da = ds[pcrps_var]
-            prepared[var] = xr.where(lower_mask, pcrps_da - da, da)
+            if bool(lower_mask.any()):
+                pcrps_var = var.replace('_tw_pcrps', '_pcrps')
+                if pcrps_var not in ds:
+                    raise ValueError(
+                        f'Variable {var} requires {pcrps_var} in the same dataset.'
+                    )
+
+                pcrps_da = ds[pcrps_var]
+                prepared[var] = xr.where(lower_mask, pcrps_da - da, da)
+            else:
+                prepared[var] = da
 
         elif 'quantile' in da.dims:
             pcrps_var = var.replace('_qw_pcrps', '_pcrps')
@@ -259,15 +263,15 @@ def prepare_score_dataset(ds: xr.Dataset, variables: list[str]) -> xr.Dataset:
                 raise ValueError(
                     f'Variable {var} requires {pcrps_var} in the same dataset.'
                 )
-        
+
             quantile_coord = da['quantile']
-        
+
             lower_mask = xr.DataArray(
                 quantile_coord.values < 0.5,
                 dims=('quantile',),
                 coords={'quantile': quantile_coord},
             )
-        
+
             pcrps_da = ds[pcrps_var]
             prepared[var] = xr.where(lower_mask, pcrps_da - da, da)
 
