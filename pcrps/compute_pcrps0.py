@@ -160,128 +160,67 @@ def qw_pcrps0_upper(y, q):
     q = np.asarray(q)
 
     # sort along last axis
-    x = np.sort(y, axis=-1)            
+    x = np.sort(y, axis=-1)
     n = x.shape[-1]
     m = q.shape[-1]
 
     # Probabilities and weights
-    p = (np.arange(1, n + 1, dtype=np.float32)) / n      
-    p_star = np.maximum(p[None, :], q[:, None])   
+    p = (np.arange(1, n + 1, dtype=np.float32)) / n
+    p_star = np.maximum(p[None, :], q[:, None])
     p_prev = np.empty_like(p)
     p_prev[0] = 0.0
     p_prev[1:] = p[:-1]
     p_prev_star = np.maximum(p_prev[None, :], q[:, None])
 
-    w = p_star - p_prev_star                
-    v = p_star**2 - p_prev_star**2             
+    w = p_star - p_prev_star
+    v = p_star**2 - p_prev_star**2
 
     # Suffix sums for w and w * x
-    W_suffix = np.cumsum(w[:, ::-1], axis=-1)[:, ::-1] 
+    W_suffix = np.cumsum(w[:, ::-1], axis=-1)[:, ::-1]
 
     leading_shape = x.shape[:-1]
     prefix = (1,) * len(leading_shape)
 
     # x with quantile axis
-    x_q = x[..., None, :]                
+    x_q = x[..., None, :]
 
     # broadcast w, v to leading dims
-    w_b = w.reshape(prefix + w.shape)           
-    v_b = v.reshape(prefix + v.shape)         
+    w_b = w.reshape(prefix + w.shape)
+    v_b = v.reshape(prefix + v.shape)
 
-    WX_suffix = np.cumsum((w_b * x_q)[..., ::-1], axis=-1)[..., ::-1] 
+    WX_suffix = np.cumsum((w_b * x_q)[..., ::-1], axis=-1)[..., ::-1]
 
-    # V and Vx 
-    V  = np.sum(v, axis=-1)               
-    Vx = np.sum(v_b * x_q, axis=-1)              
+    # V and Vx
+    V  = np.sum(v, axis=-1)
+    Vx = np.sum(v_b * x_q, axis=-1)
 
     # Indices k(i) for runs of equal x along last axis
     first = np.ones_like(x[..., :1], dtype=bool)
     rest = x[..., 1:] != x[..., :-1]
-    change = np.concatenate([first, rest], axis=-1)  
+    change = np.concatenate([first, rest], axis=-1)
 
     base_idx = np.arange(n, dtype=int)
-    start_positions = np.where(change, base_idx, 0)  
-    k = np.maximum.accumulate(start_positions, axis=-1) 
+    start_positions = np.where(change, base_idx, 0)
+    k = np.maximum.accumulate(start_positions, axis=-1)
 
     # Gather W_suffix and WX_suffix at k
     W_suffix_full = np.broadcast_to(
         W_suffix.reshape((1,) * len(leading_shape) + W_suffix.shape),
         leading_shape + W_suffix.shape,
-    )                                            
+    )
 
-    k_exp = np.expand_dims(k, axis=-2)            
-    Wk = np.take_along_axis(W_suffix_full, k_exp, axis=-1)  
-    WXk = np.take_along_axis(WX_suffix,       k_exp, axis=-1)  
+    k_exp = np.expand_dims(k, axis=-2)
+    Wk = np.take_along_axis(W_suffix_full, k_exp, axis=-1)
+    WXk = np.take_along_axis(WX_suffix,       k_exp, axis=-1)
 
     # Per-observation qwCRPS contributions, then mean over time
-    Vx_exp = Vx[..., :, None]                      
+    Vx_exp = Vx[..., :, None]
     V_exp = V.reshape(prefix + (m, 1))
-    x_qb = np.broadcast_to(x_q, leading_shape + (m, n))  
+    x_qb = np.broadcast_to(x_q, leading_shape + (m, n))
 
-    crps_i = 2.0 * WXk - 2.0 * x_qb * Wk - Vx_exp + x_qb * V_exp  
+    crps_i = 2.0 * WXk - 2.0 * x_qb * Wk - Vx_exp + x_qb * V_exp
 
     return np.mean(crps_i, axis=-1).astype(np.float32)
-
-
-def tw_pcrps0_upper(y, t):
-    """
-    Compute upper-tail threshold-weighted PCRPS^(0).
-
-    Parameters
-    ----------
-    y : array_like
-        Observations.
-    t : array_like
-        Threshold levels.
-
-    Returns
-    -------
-    numpy.ndarray
-        Upper-tail threshold-weighted PCRPS^(0) for each threshold level.
-
-    Raises
-    ------
-    ValueError
-        If the size of the last axis of ``y`` and ``t`` differ.
-    """
-    y = np.asarray(y)
-    t = np.asarray(t)
-
-    # only the last (time) axis must match
-    if y.shape[-1] != t.shape[-1]:
-        raise ValueError(
-            f'time axis mismatch: y.shape[-1]={y.shape[-1]} vs t.shape[-1]={t.shape[-1]}'
-        )
-
-    # broadcast leading dimensions
-    y, t = np.broadcast_arrays(y, t)
-    n = y.shape[-1]
-
-    # sorted sample along time
-    x = np.sort(y, axis=-1)
-
-    # weights and cumulative probabilities for the sample
-    w = np.full(n, 1.0 / n, dtype=np.float32)
-    p = np.cumsum(w)
-
-    # vectorize
-    x_exp = x[..., None, :] 
-    t_exp = t[..., :, None] 
-
-    # clip sample and obs from below at t
-    x_clipped = np.maximum(x_exp, t_exp)
-    y_clipped = np.maximum(y, t)[..., :, None]
-
-    # broadcast w, p to last axis
-    expand_shape = (1,) * (x_clipped.ndim - 1) + (n,)
-    w_j = w.reshape(expand_shape)
-    p_j = p.reshape(expand_shape)
-
-    # CRPS
-    crps = 2.0 * np.sum(w_j * ((y_clipped <= x_clipped) - p_j + 0.5 * w_j) * (x_clipped - y_clipped), axis=-1) 
-
-    # mean over time
-    return np.mean(crps, axis=-1).astype(np.float32)
 
 def pcrps0_along_time(da):
     """
@@ -305,7 +244,6 @@ def pcrps0_along_time(da):
         dask='parallelized',
         output_dtypes=[np.float32]
     )
-
 
 def qw_pcrps0_along_time(da, q):
     """
@@ -333,42 +271,11 @@ def qw_pcrps0_along_time(da, q):
         output_dtypes=[np.float32],
     )
 
-
-def tw_pcrps0_along_time(da, t):
-    """
-    Apply ``tw_pcrps0_upper`` along the ``time`` dimension.
-
-    This computes multi-threshold upper-tail threshold-weighted PCRPS^(0) over time for (possibly time-varying) threshold levels. 
-    This less efficient implementation is used here to support thresholds that change in time.
-
-    Parameters
-    ----------
-    da : xarray.DataArray
-        Input data array with a ``time`` dimension.
-    t : xarray.DataArray
-        Threshold levels with a ``time`` dimension matching that of ``da``.
-
-    Returns
-    -------
-    xarray.DataArray or xarray.Dataset
-        Threshold-weighted PCRPS^(0) with the ``time`` dimension removed.
-    """
-    return xr.apply_ufunc(
-        tw_pcrps0_upper,
-        da,
-        t,
-        input_core_dims=[['time'], ['time']],
-        output_core_dims=[[]],
-        dask='parallelized',
-        output_dtypes=[np.float32],
-    )
-
-
 def main(argv):
     del argv
 
     lead_times = [np.timedelta64(int(h), 'h') for h in LEAD_TIMES_HOURS.value]
-    
+
     forecast_ref = open_zarr_auto(
         REFERENCE_FORECAST_PATH.value,
         decode_timedelta=True,
@@ -384,7 +291,7 @@ def main(argv):
     )
     if 'level' in targets.dims:
         targets = targets.sel(level=[int(level) for level in LEVELS.value])
-    
+
     base_chunks = {
         'time': -1,
         'latitude': CHUNK_SIZE_LAT.value,
@@ -392,12 +299,12 @@ def main(argv):
     }
     if 'level' in targets.dims:
         base_chunks['level'] = 1
-        
+
     threshold_chunks = {
         **{k: v for k, v in base_chunks.items() if k != 'time'},
         'threshold': -1,
     }
-        
+
     time_threshold_chunks = {
         **base_chunks,
         'threshold': -1,
@@ -496,17 +403,21 @@ def main(argv):
 
             if record_min_thresholds is not None:
                 record_min_lt = record_min_thresholds.sel(time=valid_time)
-                tw_parts.append(tw_pcrps0_along_time(target_lt, record_min_lt))
+                target_lt_tw = (
+                    record_min_lt.astype(np.float64) - target_lt.astype(np.float64)
+                ).clip(min=0).chunk(time_threshold_chunks)
+                tw_parts.append(pcrps0_along_time(target_lt_tw))
 
             if quantile_thresholds is not None:
-
                 target_lt_tw = target_lt.clip(min=quantile_thresholds).chunk(time_threshold_chunks)
-                
                 tw_parts.append(pcrps0_along_time(target_lt_tw))
 
             if record_max_thresholds is not None:
                 record_max_lt = record_max_thresholds.sel(time=valid_time)
-                tw_parts.append(tw_pcrps0_along_time(target_lt, record_max_lt))
+                target_lt_tw = (
+                    target_lt.astype(np.float64) - record_max_lt.astype(np.float64)
+                ).clip(min=0).chunk(time_threshold_chunks)
+                tw_parts.append(pcrps0_along_time(target_lt_tw))
 
             if len(tw_parts) == 1:
                 tw_pcrps0_list.append(tw_parts[0])
@@ -534,6 +445,11 @@ def main(argv):
             tw_chunks['level'] = 1
 
         tw_pcrps0_result = tw_pcrps0_result.chunk(tw_chunks)
+        for var in VARIABLES.value:
+            tw_pcrps0_result[f'{var}_tw_pcrps'].attrs = {
+                'monthly_threshold_method': 'threshold_relative_empirical',
+                'stored_tail': 'upper for fixed thresholds and monthly_max; lower for monthly_min',
+            }
         result_parts.append(tw_pcrps0_result)
 
     result = xr.merge(result_parts)

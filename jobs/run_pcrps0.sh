@@ -16,6 +16,16 @@ else
   exit 1
 fi
 
+# Save progress and wall-clock timings.
+LOG_DIR="${PCRPS_RESULTS_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+
+RUN_NAME="$(basename "${BASH_SOURCE[0]}" .sh)"
+LOG_FILE="${LOG_DIR}/${RUN_NAME}_$(date '+%Y%m%d_%H%M%S').log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+echo "Log file: ${LOG_FILE}"
+
 # -------------------------
 # Fixed settings
 # -------------------------

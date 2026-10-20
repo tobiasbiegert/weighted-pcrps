@@ -16,6 +16,16 @@ else
   exit 1
 fi
 
+# Save progress and wall-clock timings.
+LOG_DIR="${PCRPS_RESULTS_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+
+RUN_NAME="$(basename "${BASH_SOURCE[0]}" .sh)"
+LOG_FILE="${LOG_DIR}/${RUN_NAME}_$(date '+%Y%m%d_%H%M%S').log"
+exec > >(tee -a "${LOG_FILE}") 2>&1
+
+echo "Log file: ${LOG_FILE}"
+
 # -------------------------
 # Fixed settings
 # -------------------------
@@ -24,7 +34,7 @@ CHUNK_LAT=11
 NUM_PERMUTATION=1000
 SEED=42
 
-TOTAL_JOBS=18
+TOTAL_JOBS=9
 JOB=0
 
 run_job () {
@@ -83,18 +93,11 @@ VARS_4="mean_sea_level_pressure_pcrps,2m_temperature_pcrps,10m_wind_speed_pcrps,
 # Paths to temporal score files
 # -------------------------
 FUXI_ERA5="${PCRPS_RESULTS_DIR}/fuxi_240x121_vs_era5_temporal.zarr"
-FUXI_IFS="${PCRPS_RESULTS_DIR}/fuxi_240x121_vs_ifs_analysis_temporal.zarr"
 
 GRAPHCAST_ERA5="${PCRPS_RESULTS_DIR}/graphcast_240x121_vs_era5_temporal.zarr"
-GRAPHCAST_IFS="${PCRPS_RESULTS_DIR}/graphcast_240x121_vs_ifs_analysis_temporal.zarr"
-
-GRAPHCAST_OPERATIONAL_ERA5="${PCRPS_RESULTS_DIR}/graphcast_operational_240x121_vs_era5_temporal.zarr"
 GRAPHCAST_OPERATIONAL_IFS="${PCRPS_RESULTS_DIR}/graphcast_operational_240x121_vs_ifs_analysis_temporal.zarr"
 
 PANGU_ERA5="${PCRPS_RESULTS_DIR}/pangu_240x121_vs_era5_temporal.zarr"
-PANGU_IFS="${PCRPS_RESULTS_DIR}/pangu_240x121_vs_ifs_analysis_temporal.zarr"
-
-PANGU_OPERATIONAL_ERA5="${PCRPS_RESULTS_DIR}/pangu_operational_240x121_vs_era5_temporal.zarr"
 PANGU_OPERATIONAL_IFS="${PCRPS_RESULTS_DIR}/pangu_operational_240x121_vs_ifs_analysis_temporal.zarr"
 
 HRES_ERA5="${PCRPS_RESULTS_DIR}/hres_240x121_vs_era5_temporal.zarr"
@@ -111,24 +114,10 @@ run_job "${JOB}" "fuxi vs graphcast (era5)" \
   "${VARS_4}"
 
 JOB=$((JOB+1))
-run_job "${JOB}" "fuxi vs graphcast (ifs_analysis)" \
-  "${FUXI_IFS}" \
-  "${GRAPHCAST_IFS}" \
-  "${PCRPS_RESULTS_DIR}/tests/fuxi_graphcast_vs_ifs_analysis_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
 run_job "${JOB}" "fuxi vs pangu (era5)" \
   "${FUXI_ERA5}" \
   "${PANGU_ERA5}" \
   "${PCRPS_RESULTS_DIR}/tests/fuxi_pangu_vs_era5_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
-run_job "${JOB}" "fuxi vs pangu (ifs_analysis)" \
-  "${FUXI_IFS}" \
-  "${PANGU_IFS}" \
-  "${PCRPS_RESULTS_DIR}/tests/fuxi_pangu_vs_ifs_analysis_p.zarr" \
   "${VARS_3}"
 
 JOB=$((JOB+1))
@@ -139,24 +128,10 @@ run_job "${JOB}" "fuxi vs hres (era5)" \
   "${VARS_4}"
 
 JOB=$((JOB+1))
-run_job "${JOB}" "fuxi vs hres (ifs_analysis)" \
-  "${FUXI_IFS}" \
-  "${HRES_IFS}" \
-  "${PCRPS_RESULTS_DIR}/tests/fuxi_hres_vs_ifs_analysis_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
 run_job "${JOB}" "graphcast vs pangu (era5)" \
   "${GRAPHCAST_ERA5}" \
   "${PANGU_ERA5}" \
   "${PCRPS_RESULTS_DIR}/tests/graphcast_pangu_vs_era5_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
-run_job "${JOB}" "graphcast vs pangu (ifs_analysis)" \
-  "${GRAPHCAST_IFS}" \
-  "${PANGU_IFS}" \
-  "${PCRPS_RESULTS_DIR}/tests/graphcast_pangu_vs_ifs_analysis_p.zarr" \
   "${VARS_3}"
 
 JOB=$((JOB+1))
@@ -167,31 +142,10 @@ run_job "${JOB}" "graphcast vs hres (era5)" \
   "${VARS_4}"
 
 JOB=$((JOB+1))
-run_job "${JOB}" "graphcast vs hres (ifs_analysis)" \
-  "${GRAPHCAST_IFS}" \
-  "${HRES_IFS}" \
-  "${PCRPS_RESULTS_DIR}/tests/graphcast_hres_vs_ifs_analysis_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
 run_job "${JOB}" "pangu vs hres (era5)" \
   "${PANGU_ERA5}" \
   "${HRES_ERA5}" \
   "${PCRPS_RESULTS_DIR}/tests/pangu_hres_vs_era5_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
-run_job "${JOB}" "pangu vs hres (ifs_analysis)" \
-  "${PANGU_IFS}" \
-  "${HRES_IFS}" \
-  "${PCRPS_RESULTS_DIR}/tests/pangu_hres_vs_ifs_analysis_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
-run_job "${JOB}" "graphcast_operational vs pangu_operational (era5)" \
-  "${GRAPHCAST_OPERATIONAL_ERA5}" \
-  "${PANGU_OPERATIONAL_ERA5}" \
-  "${PCRPS_RESULTS_DIR}/tests/graphcast_operational_pangu_operational_vs_era5_p.zarr" \
   "${VARS_3}"
 
 JOB=$((JOB+1))
@@ -202,24 +156,10 @@ run_job "${JOB}" "graphcast_operational vs pangu_operational (ifs_analysis)" \
   "${VARS_3}"
 
 JOB=$((JOB+1))
-run_job "${JOB}" "graphcast_operational vs hres (era5)" \
-  "${GRAPHCAST_OPERATIONAL_ERA5}" \
-  "${HRES_ERA5}" \
-  "${PCRPS_RESULTS_DIR}/tests/graphcast_operational_hres_vs_era5_p.zarr" \
-  "${VARS_4}"
-
-JOB=$((JOB+1))
 run_job "${JOB}" "graphcast_operational vs hres (ifs_analysis)" \
   "${GRAPHCAST_OPERATIONAL_IFS}" \
   "${HRES_IFS}" \
   "${PCRPS_RESULTS_DIR}/tests/graphcast_operational_hres_vs_ifs_analysis_p.zarr" \
-  "${VARS_3}"
-
-JOB=$((JOB+1))
-run_job "${JOB}" "pangu_operational vs hres (era5)" \
-  "${PANGU_OPERATIONAL_ERA5}" \
-  "${HRES_ERA5}" \
-  "${PCRPS_RESULTS_DIR}/tests/pangu_operational_hres_vs_era5_p.zarr" \
   "${VARS_3}"
 
 JOB=$((JOB+1))

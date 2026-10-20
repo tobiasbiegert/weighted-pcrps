@@ -9,6 +9,7 @@ import xarray as xr
 import xarray_beam as xbeam
 import numpy as np
 import dask.array as da
+from pcrps.pcrps_helper import get_easyuq_tasks
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -35,8 +36,8 @@ TIME_STOP = flags.DEFINE_string(
     help='ISO 8601 timestamp (inclusive) at which to stop',
 )
 VARIABLES = flags.DEFINE_list(
-    'variables', 
-    ['2m_temperature'], 
+    'variables',
+    ['2m_temperature'],
     help='Variables to compute PCRPS for'
 )
 LEVELS = flags.DEFINE_list(
@@ -45,23 +46,38 @@ LEVELS = flags.DEFINE_list(
     help='Comma delimited list of pressure levels to select.'
 )
 OUTPUT_PATH = flags.DEFINE_string(
-    'output_path', 
-    None, 
+    'output_path',
+    None,
     help='Where to save results.'
 )
+TEMPORAL_OUTPUT_PATH = flags.DEFINE_string(
+    'temporal_output_path',
+    None,
+    help='Optional second output containing individual scores. Requires --temporal_mean=True.'
+)
+TEMPORAL_THRESHOLDS = flags.DEFINE_list(
+    'temporal_thresholds',
+    [],
+    help='Threshold labels to retain in the second output. If empty, retain all computed thresholds.'
+)
+TEMPORAL_QUANTILES = flags.DEFINE_list(
+    'temporal_quantiles',
+    [],
+    help='qwPCRPS quantiles to retain in the second output. If empty, retain all computed quantiles.'
+)
 CHUNK_SIZE_LAT = flags.DEFINE_integer(
-    'chunk_size_lat', 
-    -1, 
+    'chunk_size_lat',
+    -1,
     help='Chunk size for latitude dimension'
 )
 CHUNK_SIZE_LON = flags.DEFINE_integer(
-    'chunk_size_lon', 
-    -1, 
+    'chunk_size_lon',
+    -1,
     help='Chunk size for longitude dimension'
 )
 RUNNER = flags.DEFINE_string(
-    'runner', 
-    None, 
+    'runner',
+    None,
     help='beam.runners.Runner'
 )
 SKIP_NON_HEADLINE = flags.DEFINE_bool(
@@ -75,8 +91,8 @@ RECHUNK = flags.DEFINE_bool(
     help='Whether to apply rechunk transform to the dataset before processing.'
 )
 TEMPORAL_MEAN = flags.DEFINE_bool(
-    'temporal_mean', 
-    False, 
+    'temporal_mean',
+    False,
     help='Whether to directly compute PCRPS by averaging over time.'
 )
 QW_PCRPS = flags.DEFINE_bool(
@@ -137,10 +153,10 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
     targets : xarray.Dataset, optional
         Target data.
     variable_level_mapping : dict, optional
-        Mapping from variable name to WB2 headline level. If provided and ``skip_non_headline`` is True, 
+        Mapping from variable name to WB2 headline level. If provided and ``skip_non_headline`` is True,
         upper-air variables at levels different from the mapped headline level are skipped and filled with NaNs.
     skip_non_headline : bool, default True
-        If True, skip upper-level chunks whose level does not match the specified headline level in ``variable_level_mapping``. 
+        If True, skip upper-level chunks whose level does not match the specified headline level in ``variable_level_mapping``.
         Skipped chunks return NaN-filled arrays with the appropriate shape.
     compute_qw : bool, default False
         If True, also compute quantile-weighted PCRPS at the specified quantile levels.
@@ -159,10 +175,7 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
     # Import necessary modules
     import numpy as np
     import xarray as xr
-    from pcrps.pcrps_helper import compute_easyuq
-    
-    if compute_tw and thresholds is None:
-        raise ValueError('compute_tw=True but "thresholds" is None in compute_pcrps.')
+    from pcrps.pcrps_helper import compute_easyuq, get_easyuq_tasks
 
     # Restrict forecast times so that forecast_time + lead_time lies within the target window (not necessary for 2020 data)
     start_time_bound = (targets.time[0] - prediction_chunk.prediction_timedelta).values[0]
@@ -171,16 +184,16 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
 
     # Extract the variable name from the key
     var, = key.vars
-    
+
     # Get the lead time of the chunk. This assumes that 'prediction_timedelta' contains only a single lead time value. Therefore the chunk size along this dimension must be 1.
     lead_time = prediction_chunk.prediction_timedelta.values[0]
-    
-    # Tasks dimension: always idr + pcrps, optional qw_pcrps_time and tw_pcrps_time
-    tasks = ['idr_time', 'pcrps_time']
-    if compute_qw:
-        tasks.append('qw_pcrps_time')
-    if compute_tw:
-        tasks.append('tw_pcrps_time')
+
+    # Use the same timing-task labels as compute_easyuq
+    tasks = get_easyuq_tasks(
+        compute_qw=compute_qw,
+        compute_tw=compute_tw,
+        thresholds=thresholds,
+    )
     n_tasks = len(tasks)
 
     # Skip TP24hr for lead times of less than 24 hours
@@ -213,12 +226,12 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
             'prediction_timedelta': prediction_chunk.prediction_timedelta,
             'task': tasks
         }
-        
+
         vars_dict = {
             f'{var}_pcrps': (('longitude','latitude','prediction_timedelta','time'), pcrps),
             f'{var}_time': (('longitude','latitude','prediction_timedelta','task'), time_dummy),
         }
-        
+
         if compute_qw:
             qw_pcrps = np.full((
                 len(prediction_chunk.longitude),
@@ -232,7 +245,7 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
                 qw_pcrps,
             )
             pcrps_coords['quantile'] = quantiles
-        
+
         if compute_tw:
             tw_pcrps = np.full((
                     len(prediction_chunk.longitude),
@@ -248,15 +261,15 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
             pcrps_coords['threshold'] = thresholds.threshold
 
         result_dataset = xr.Dataset(vars_dict, coords={**pcrps_coords, **time_coords})
-                                    
+
         return key, result_dataset
-    
+
     # Align target chunk with the valid prediction times
     valid_time = prediction_chunk.time + lead_time
     target_chunk = targets.sel(time=valid_time, latitude=prediction_chunk.latitude, longitude=prediction_chunk.longitude)
     if compute_tw:
         threshold_chunk = thresholds.sel(time=valid_time, latitude=prediction_chunk.latitude, longitude=prediction_chunk.longitude)
-    
+
     if 'level' in prediction_chunk.dims:
         # Upper-level variable
         level = prediction_chunk.level.values[0]
@@ -294,12 +307,12 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
                 'level': prediction_chunk.level,
                 'task': tasks
             }
-            
+
             vars_dict = {
                 f'{var}_pcrps': (('longitude','latitude','prediction_timedelta','level','time'), pcrps),
                 f'{var}_time': (('longitude','latitude','prediction_timedelta','level','task'), time_dummy),
             }
-            
+
             if compute_qw and quantiles is not None:
                 qw_pcrps = np.full((
                     len(prediction_chunk.longitude),
@@ -314,7 +327,7 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
                     qw_pcrps,
                 )
                 pcrps_coords['quantile'] = quantiles
-                
+
             if compute_tw:
                 tw_pcrps = np.full(
                     (
@@ -332,7 +345,7 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
                 pcrps_coords['threshold'] = thresholds.threshold
 
             result_dataset = xr.Dataset(vars_dict, coords={**pcrps_coords, **time_coords})
-                                    
+
         else:
             logging.info(f'Processing {key}')
             preds = prediction_chunk.sel(level=level)[var].compute()
@@ -359,17 +372,80 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
 
     return key, result_dataset
 
+def select_temporal_scores(key, scores, thresholds=None, quantiles=None):
+    """
+    Select thresholds and quantiles for the additional temporal output.
+
+    Parameters
+    ----------
+    key : xarray_beam.ChunkKey or None
+        Metadata key identifying the chunk. Use None when selecting a template.
+    scores : xarray.Dataset
+        Individual scores or their output template.
+    thresholds : list of str, optional
+        Threshold labels to retain. If None, retain all thresholds.
+    quantiles : array-like, optional
+        qwPCRPS quantiles to retain. If None, retain all quantiles.
+
+    Returns
+    -------
+    tuple
+        The unchanged key and the selected dataset, including timing measurements.
+    """
+    selection = {}
+    if thresholds is not None:
+        selection['threshold'] = thresholds
+    if quantiles is not None:
+        selection['quantile'] = quantiles
+
+    return key, scores.sel(selection)
+
+def average_temporal_scores(key, scores):
+    """
+    Average scores over the complete time series within one chunk.
+
+    Parameters
+    ----------
+    key : xarray_beam.Key
+        Metadata key identifying the chunk.
+    scores : xarray.Dataset
+        Individual scores and timing measurements. The chunk must contain
+        the complete evaluation period.
+
+    Returns
+    -------
+    tuple
+        The key without its time offset and the averaged dataset.
+        Timing measurements, which have no time dimension, remain unchanged.
+    """
+    averaged = scores.mean('time', skipna=False, keep_attrs=True)
+    if 'time' in key.offsets:
+        key = key.with_offsets(time=None)
+    return key, averaged
+
 def main(argv):
+    if TEMPORAL_OUTPUT_PATH.value is not None:
+        if not TEMPORAL_MEAN.value:
+            raise ValueError('--temporal_output_path requires --temporal_mean=True.')
+        if TEMPORAL_OUTPUT_PATH.value.rstrip('/') == OUTPUT_PATH.value.rstrip('/'):
+            raise ValueError('The main and temporal output paths must be different.')
+
+        temporal_thresholds = TEMPORAL_THRESHOLDS.value or None
+        temporal_quantiles = (
+            np.array([float(q) for q in TEMPORAL_QUANTILES.value], dtype=np.float32)
+            if TEMPORAL_QUANTILES.value else None
+        )
+
     # Open model outputs and get input chunks
     predictions, input_chunks = xbeam.open_zarr(PREDICTION_PATH.value, decode_timedelta=True)
-    
+
     # Handle different variable name and scale for FuXi
     if ('total_precipitation_24hr' not in predictions.data_vars and 'total_precipitation_24hr_from_6hr' in predictions.data_vars):
         predictions = predictions.rename({'total_precipitation_24hr_from_6hr': 'total_precipitation_24hr'})
         predictions["total_precipitation_24hr"] = predictions["total_precipitation_24hr"] / 1000.0
 
     logging.info('Selecting variables, lead times and time.')
-    
+
     predictions = predictions[VARIABLES.value].sel(time=slice(TIME_START.value, TIME_STOP.value))
 
     if LEAD_TIMES_HOURS.value:
@@ -378,10 +454,10 @@ def main(argv):
 
     # Define working chunks
     working_chunks = {
-        'longitude': CHUNK_SIZE_LON.value, 
-        'latitude': CHUNK_SIZE_LAT.value, 
-        'prediction_timedelta': 1, 
-        'level': 1, 
+        'longitude': CHUNK_SIZE_LON.value,
+        'latitude': CHUNK_SIZE_LAT.value,
+        'prediction_timedelta': 1,
+        'level': 1,
         'time': -1
     }
 
@@ -394,16 +470,16 @@ def main(argv):
 
     # Define output chunks
     output_chunks = working_chunks.copy()
-    
-    if TEMPORAL_MEAN.value: 
+
+    if TEMPORAL_MEAN.value:
         output_chunks.pop('time', None)
-        
+
     # Open target data
     logging.info('Opening targets.')
     tmin = predictions.time[0] + predictions.prediction_timedelta.min()
     tmax = predictions.time[-1] + predictions.prediction_timedelta.max()
     targets = xr.open_zarr(TARGET_PATH.value).sel(time=slice(tmin, tmax))[VARIABLES.value]
-    
+
     # Decide which quantiles to use for qwPCRPS
     if QW_PCRPS.value:
         if QUANTILES.value:
@@ -416,7 +492,7 @@ def main(argv):
     thresholds = None
     if TW_PCRPS.value:
         logging.info('Opening threshold datasets for twPCRPS.')
-        
+
         # Require that at least one threshold source is provided
         if (
             QUANTILE_THRESHOLDS_PATH.value is None
@@ -434,7 +510,7 @@ def main(argv):
         # Use verification times for monthly record-based thresholds
         months = targets.time.dt.month
 
-        # 1) Monthly min thresholds 
+        # 1) Monthly min thresholds
         if MONTHLY_MIN_RECORDS_PATH.value is not None:
             logging.info('Opening monthly min record thresholds.')
             rec_min = xr.open_zarr(MONTHLY_MIN_RECORDS_PATH.value)[VARIABLES.value]
@@ -454,7 +530,7 @@ def main(argv):
 
             threshold_pieces.append(ts_thr)
 
-        # 3) Monthly max thresholds 
+        # 3) Monthly max thresholds
         if MONTHLY_MAX_RECORDS_PATH.value is not None:
             logging.info('Opening monthly max record thresholds.')
             rec_max = xr.open_zarr(MONTHLY_MAX_RECORDS_PATH.value)[VARIABLES.value]
@@ -468,21 +544,29 @@ def main(argv):
         # Concat different thresholds
         thresholds = xr.concat(threshold_pieces, dim='threshold')
 
+        # Validate the threshold labels once, before processing chunks
+        threshold_names = thresholds.threshold.values.tolist()
+        if not threshold_names:
+            raise ValueError('TW_PCRPS=True requires non-empty threshold data.')
+        if len(set(threshold_names)) != len(threshold_names):
+            raise ValueError('Threshold labels must be unique.')
+
         # Chunk thresholds
         thr_chunks = working_chunks.copy()
         thr_chunks['threshold'] = -1
         thresholds = thresholds.chunk({d: s for d, s in thr_chunks.items() if d in thresholds.dims})
-                                    
-    # Tasks dimension for template
-    tasks = ['idr_time', 'pcrps_time']
-    if QW_PCRPS.value:
-        tasks.append('qw_pcrps_time')
-    if TW_PCRPS.value:
-        tasks.append('tw_pcrps_time')
+
+    # Use the same timing-task labels for the output template
+    tasks = get_easyuq_tasks(
+        compute_qw=QW_PCRPS.value,
+        compute_tw=TW_PCRPS.value,
+        thresholds=thresholds,
+    )
     n_tasks = len(tasks)
 
     # Create template
     templates = []
+    temporal_templates = []
 
     for var in VARIABLES.value:
         coords = {
@@ -497,7 +581,7 @@ def main(argv):
             coords['quantile'] = quantiles
         if TW_PCRPS.value:
             coords['threshold'] = thresholds.threshold
-                                    
+
         data_vars = {
             f'{var}_pcrps': (
                 ('longitude', 'latitude', 'prediction_timedelta', 'time'),
@@ -518,7 +602,7 @@ def main(argv):
                 ), np.nan, dtype=np.float32),
             ),
         }
-        
+
         if QW_PCRPS.value:
             data_vars[f'{var}_qw_pcrps'] = (
                 ('longitude', 'latitude', 'prediction_timedelta', 'time', 'quantile'),
@@ -530,7 +614,7 @@ def main(argv):
                     len(quantiles),
                 ), np.nan, dtype=np.float32),
             )
-            
+
         if TW_PCRPS.value:
             data_vars[f'{var}_tw_pcrps'] = (
                 ('longitude', 'latitude', 'prediction_timedelta', 'time', 'threshold'),
@@ -548,6 +632,11 @@ def main(argv):
             )
 
         template = xr.Dataset(data_vars, coords=coords)
+        if TW_PCRPS.value:
+            template[f'{var}_tw_pcrps'].attrs = {
+                'monthly_threshold_method': 'threshold_relative_idr',
+                'stored_tail': 'upper for fixed thresholds and monthly_max; lower for monthly_min',
+            }
 
         # If variable has level dimension, add it and make sure dim order matches compute_pc output
         if 'level' in predictions[var].dims:
@@ -555,24 +644,34 @@ def main(argv):
 
             template[f'{var}_pcrps'] = template[f'{var}_pcrps'].transpose('longitude', 'latitude', 'prediction_timedelta', 'level', 'time')
             template[f'{var}_time'] = template[f'{var}_time'].transpose('longitude', 'latitude', 'prediction_timedelta', 'level', 'task')
-            
+
             if QW_PCRPS.value:
                 template[f'{var}_qw_pcrps'] = template[f'{var}_qw_pcrps'].transpose(
                     'longitude', 'latitude', 'prediction_timedelta', 'level', 'time', 'quantile',
                 )
-                
+
             if TW_PCRPS.value:
                 template[f'{var}_tw_pcrps'] = template[f'{var}_tw_pcrps'].transpose(
                     'longitude', 'latitude', 'prediction_timedelta', 'level', 'time', 'threshold'
                 )
 
+        # Keep a template for the optional temporal-score output
+        if TEMPORAL_OUTPUT_PATH.value is not None:
+            _, temporal_template = select_temporal_scores(
+                None,
+                template.assign_coords(time=predictions.time),
+                thresholds=temporal_thresholds,
+                quantiles=temporal_quantiles,
+            )
+            temporal_templates.append(temporal_template)
+
         # Optionally discard time dimension
         if TEMPORAL_MEAN.value:
             template[f'{var}_pcrps'] = template[f'{var}_pcrps'].isel(time=0, drop=True)
-            
+
             if QW_PCRPS.value:
                 template[f'{var}_qw_pcrps'] = template[f'{var}_qw_pcrps'].isel(time=0, drop=True)
-                
+
             if TW_PCRPS.value:
                 template[f'{var}_tw_pcrps'] = template[f'{var}_tw_pcrps'].isel(time=0, drop=True)
 
@@ -583,6 +682,8 @@ def main(argv):
         templates.append(template)
 
     final_template = xr.merge(templates)
+    if TEMPORAL_OUTPUT_PATH.value is not None:
+        temporal_template = xr.merge(temporal_templates).chunk(working_chunks)
     logging.info('Templates created.')
 
     # Define and run the Apache Beam pipeline
@@ -605,7 +706,7 @@ def main(argv):
                     target_chunks=working_chunks,
                     itemsize=4,
                 )
-            )        
+            )
         # Compute PCRPS
         pcrps_pipeline = (
             pcrps_pipeline
@@ -620,13 +721,36 @@ def main(argv):
                 thresholds=thresholds
             )
         )
-        # Optionally average over time
+        # Optionally also write selected individual scores from this computation
+        if TEMPORAL_OUTPUT_PATH.value is not None:
+            (
+                pcrps_pipeline
+                | 'SelectTemporalScores' >> beam.MapTuple(
+                    select_temporal_scores,
+                    thresholds=temporal_thresholds,
+                    quantiles=temporal_quantiles,
+                )
+                | 'TemporalChunksToZarr' >> xbeam.ChunksToZarr(
+                    TEMPORAL_OUTPUT_PATH.value,
+                    template=xbeam.make_template(temporal_template),
+                    zarr_chunks=working_chunks,
+                )
+            )
+        # # Optionally average over time
+        # if TEMPORAL_MEAN.value:
+        #     pcrps_pipeline = (
+        #         pcrps_pipeline
+        #         | 'TemporalMean' >> xbeam.Mean(
+        #             dim='time',
+        #             skipna=False,
+        #         )
+        #     )
+        # Optionally average over time within each completed chunk
         if TEMPORAL_MEAN.value:
             pcrps_pipeline = (
                 pcrps_pipeline
-                | 'TemporalMean' >> xbeam.Mean(
-                    dim='time',
-                    skipna=False,
+                | 'TemporalMean' >> beam.MapTuple(
+                    average_temporal_scores
                 )
             )
         # Write to Zarr
