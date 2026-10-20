@@ -33,7 +33,7 @@ GENCAST_PATH="gs://weatherbench2/datasets/gencast/2020-240x121_equiangular_with_
 ERA5_PATH="gs://weatherbench2/datasets/era5/1959-2023_01_10-6h-240x121_equiangular_with_poles_conservative.zarr"
 IFS_ANALYSIS_PATH="gs://weatherbench2/datasets/hres_t0/2016-2022-6h-240x121_equiangular_with_poles_conservative.zarr"
 
-QUANTILE_THRESHOLDS="${PCRPS_THRESHOLDS_DIR}/era5_quantiles_1979_2019.zarr"
+QUANTILE_THRESHOLDS_PATH="${PCRPS_THRESHOLDS_DIR}/era5_quantiles_1979_2019.zarr"
 MAXREC="${PCRPS_THRESHOLDS_DIR}/era5_record_max_month_1979_2019.zarr"
 MINREC="${PCRPS_THRESHOLDS_DIR}/era5_record_min_month_1979_2019.zarr"
 QUANTILE_THRESHOLDS="q000,q001,q005,q095,q099,q100"
@@ -86,7 +86,7 @@ run_job () {
 
   if [ "${TW}" = "True" ]; then
     CMD+=(
-      --quantile_thresholds_path="${QUANTILE_THRESHOLDS}"
+      --quantile_thresholds_path="${QUANTILE_THRESHOLDS_PATH}"
       --monthly_max_records_path="${MAXREC}"
       --monthly_min_records_path="${MINREC}"
       --quantile_thresholds="${QUANTILE_THRESHOLDS}"
