@@ -25,9 +25,10 @@ pcrps/
 scripts/
   compute_thresholds.py  Build ERA5 quantile and record thresholds
   evaluate_ensemble.py   Evaluate ensemble forecasts
+  create_figures.py      Create figures for the paper, appendix and supplement
 
 jobs/
-  run_*.sh               Shell scripts used for the paper experiments
+  run_*.sh               Shell scripts used for the experiments
 ```
 
 ## Setup
@@ -49,26 +50,49 @@ conda activate weighted_pcrps
 
 ## Usage
 
-The shell scripts in `jobs/` contain the commands used for the experiments in the paper. They automatically change to the repository root and load `local_paths.env`.
+Run the following commands from the repository root in the order shown.
 
-For example, to compute PCRPS-based scores:
-
-```bash
-bash jobs/run_pcrps.sh
-```
-
-To compute reference scores:
-
-```bash
-bash jobs/run_pcrps0.sh
-```
-
-To build threshold datasets directly from Python, first load the local path configuration:
+Build the threshold datasets:
 
 ```bash
 source local_paths.env
 python scripts/compute_thresholds.py
 ```
+
+The shell scripts in `jobs/` contain the commands used for the experiments in the paper. They automatically change to the repository root and load `local_paths.env`.
+
+Compute the reference scores:
+
+```bash
+bash jobs/run_pcrps0.sh
+```
+
+Compute the PCRPS-based scores:
+
+```bash
+bash jobs/run_pcrps.sh
+```
+
+Compute the ensemble scores used in the scatter plots:
+
+```bash
+bash jobs/run_ensemble_evaluation.sh
+```
+
+Run the block permutation tests:
+
+```bash
+bash jobs/run_tests.sh
+```
+
+Create the figures:
+
+```bash
+source local_paths.env
+python scripts/create_figures.py
+```
+
+The figures are saved to plots/.
 
 ## Data
 
