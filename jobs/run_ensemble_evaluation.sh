@@ -38,6 +38,9 @@ MAXREC="${PCRPS_THRESHOLDS_DIR}/era5_record_max_month_1979_2019.zarr"
 MINREC="${PCRPS_THRESHOLDS_DIR}/era5_record_min_month_1979_2019.zarr"
 QUANTILE_THRESHOLDS="q000,q001,q005,q095,q099,q100"
 
+ENSEMBLE_DIR="${PCRPS_RESULTS_DIR}/ensemble"
+mkdir -p "${ENSEMBLE_DIR}"
+
 TOTAL_JOBS=8
 JOB=0
 
@@ -112,7 +115,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "ifs_ens vs era5 crps" \
   "${IFS_ENS_PATH}" \
   "${ERA5_PATH}" \
-  "${PCRPS_RESULTS_DIR}/ifs_ens_vs_era5_crps.zarr" \
+  "${ENSEMBLE_DIR}/ifs_ens_vs_era5_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed,total_precipitation_24hr" \
   "number" \
   "False"
@@ -121,7 +124,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "ifs_ens vs ifs_analysis crps" \
   "${IFS_ENS_PATH}" \
   "${IFS_ANALYSIS_PATH}" \
-  "${PCRPS_RESULTS_DIR}/ifs_ens_vs_ifs_analysis_crps.zarr" \
+  "${ENSEMBLE_DIR}/ifs_ens_vs_ifs_analysis_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed" \
   "number" \
   "False"
@@ -130,7 +133,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "gencast vs era5 crps" \
   "${GENCAST_PATH}" \
   "${ERA5_PATH}" \
-  "${PCRPS_RESULTS_DIR}/gencast_vs_era5_crps.zarr" \
+  "${ENSEMBLE_DIR}/gencast_vs_era5_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed,total_precipitation_24hr" \
   "sample" \
   "False"
@@ -139,7 +142,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "gencast vs ifs_analysis crps" \
   "${GENCAST_PATH}" \
   "${IFS_ANALYSIS_PATH}" \
-  "${PCRPS_RESULTS_DIR}/gencast_vs_ifs_analysis_crps.zarr" \
+  "${ENSEMBLE_DIR}/gencast_vs_ifs_analysis_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed" \
   "sample" \
   "False"
@@ -148,7 +151,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "ifs_ens vs era5 tw_crps" \
   "${IFS_ENS_PATH}" \
   "${ERA5_PATH}" \
-  "${PCRPS_RESULTS_DIR}/ifs_ens_vs_era5_tw_crps.zarr" \
+  "${ENSEMBLE_DIR}/ifs_ens_vs_era5_tw_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed,total_precipitation_24hr" \
   "number" \
   "True"
@@ -157,7 +160,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "ifs_ens vs ifs_analysis tw_crps" \
   "${IFS_ENS_PATH}" \
   "${IFS_ANALYSIS_PATH}" \
-  "${PCRPS_RESULTS_DIR}/ifs_ens_vs_ifs_analysis_tw_crps.zarr" \
+  "${ENSEMBLE_DIR}/ifs_ens_vs_ifs_analysis_tw_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed" \
   "number" \
   "True"
@@ -166,7 +169,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "gencast vs era5 tw_crps" \
   "${GENCAST_PATH}" \
   "${ERA5_PATH}" \
-  "${PCRPS_RESULTS_DIR}/gencast_vs_era5_tw_crps.zarr" \
+  "${ENSEMBLE_DIR}/gencast_vs_era5_tw_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed,total_precipitation_24hr" \
   "sample" \
   "True"
@@ -175,7 +178,7 @@ JOB=$((JOB+1))
 run_job "${JOB}" "gencast vs ifs_analysis tw_crps" \
   "${GENCAST_PATH}" \
   "${IFS_ANALYSIS_PATH}" \
-  "${PCRPS_RESULTS_DIR}/gencast_vs_ifs_analysis_tw_crps.zarr" \
+  "${ENSEMBLE_DIR}/gencast_vs_ifs_analysis_tw_crps.zarr" \
   "2m_temperature,mean_sea_level_pressure,10m_wind_speed" \
   "sample" \
   "True"
