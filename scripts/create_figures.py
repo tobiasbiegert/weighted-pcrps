@@ -1945,6 +1945,10 @@ def main():
         fuxi_vs_era5_pcrps_maps = fuxi_vs_era5_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
         era5_climatology_vs_era5_pcrps_maps = era5_climatology_vs_era5_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
 
+        hres_vs_ifs_analysis_pcrps_maps = hres_vs_ifs_analysis_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
+        pangu_operational_vs_ifs_analysis_pcrps_maps = pangu_operational_vs_ifs_analysis_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
+        graphcast_operational_vs_ifs_analysis_pcrps_maps = graphcast_operational_vs_ifs_analysis_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
+
         fuxi_graphcast_vs_era5_p = xr.open_zarr(f"{RESULTS_DIR}/tests/fuxi_graphcast_vs_era5_p.zarr", decode_timedelta=True).load()
         fuxi_pangu_vs_era5_p = xr.open_zarr(f"{RESULTS_DIR}/tests/fuxi_pangu_vs_era5_p.zarr", decode_timedelta=True).load()
         fuxi_hres_vs_era5_p = xr.open_zarr(f"{RESULTS_DIR}/tests/fuxi_hres_vs_era5_p.zarr", decode_timedelta=True).load()
@@ -2048,19 +2052,6 @@ def main():
     )
 
     # Appendix
-    logging.info("Saving maps_best_model_tw_pcrps_monthly_max_vs_era5.png")
-    plot_best_model_maps(
-        model_datasets={
-            "HRES": hres_vs_era5_pcrps_maps,
-            "PW-ERA5": pangu_vs_era5_pcrps_maps,
-            "GC-ERA5": graphcast_vs_era5_pcrps_maps,
-            "FuXi": fuxi_vs_era5_pcrps_maps,
-        },
-        score="tw_pcrps",
-        threshold="monthly_max",
-        save_path=PLOTS_DIR / "maps_best_model_tw_pcrps_monthly_max_vs_era5.png",
-    )
-
     logging.info("Saving maps_fuxi_tw_pcrps_skill_q099_vs_era5.png")
     plot_skill_score_maps(
         forecast_ds=fuxi_vs_era5_pcrps_maps,
@@ -2073,15 +2064,15 @@ def main():
         save_path=PLOTS_DIR / "maps_fuxi_tw_pcrps_skill_q099_vs_era5.png",
     )
 
-    logging.info("Saving maps_sig_best_model_ai_tw_pcrps_monthly_max_vs_era5.png")
+    logging.info("Saving maps_sig_best_model_ai_tw_pcrps_q099_vs_era5.png")
     plot_significant_best_model_maps(
         pairwise_p_values=pairwise_p_values_era5,
         model_order=["HRES", "PW-ERA5", "GC-ERA5", "FuXi"],
         score="tw_pcrps",
-        threshold="monthly_max",
+        threshold="q099",
         include_ai_better=True,
         legend_fontsize=21,
-        save_path=PLOTS_DIR / "maps_sig_best_model_ai_tw_pcrps_monthly_max_vs_era5.png",
+        save_path=PLOTS_DIR / "maps_sig_best_model_ai_tw_pcrps_q099_vs_era5.png",
     )
 
     logging.info("Saving tw_pcrps_q100_vs_era5.pdf")
@@ -2100,12 +2091,36 @@ def main():
         save_path=PLOTS_DIR / "tw_pcrps_q099_vs_era5.pdf",
     )
 
+    logging.info("Saving tw_pcrpss_operational.pdf")
+    plot_tw_pcrps_skill_by_threshold(
+        forecast_map=ifs_forecast_map,
+        reference_ds=ifs_analysis_pcrps0_spatial_avg,
+        ground_truth="ifs_analysis",
+        skill_reference="pcrps0",
+        tail="both",
+        save_path=PLOTS_DIR / "tw_pcrpss_operational.pdf",
+    )
+
     logging.info("Saving tw_pcrps_monthly_records_operational.pdf")
     plot_tw_pcrps_panels(
         dataset_map=ifs_forecast_map,
         threshold="monthly_max",
         ground_truth="ifs_analysis",
         save_path=PLOTS_DIR / "tw_pcrps_monthly_records_operational.pdf",
+    )
+
+    logging.info("Saving maps_best_operational_model_tw_pcrps_q099_vs_ifs_analysis.png")
+    plot_best_model_maps(
+        model_datasets={
+            "HRES": hres_vs_ifs_analysis_pcrps_maps,
+            "PW-IFS": pangu_operational_vs_ifs_analysis_pcrps_maps,
+            "GC-IFS": graphcast_operational_vs_ifs_analysis_pcrps_maps,
+        },
+        score="tw_pcrps",
+        threshold="q099",
+        variables=["mean_sea_level_pressure", "2m_temperature", "10m_wind_speed"],
+        legend_fontsize=22,
+        save_path=PLOTS_DIR / "maps_best_operational_model_tw_pcrps_q099_vs_ifs_analysis.png",
     )
 
     logging.info("Saving scatterplot_nwp_tw_crps_vs_era5.png")
@@ -2186,7 +2201,6 @@ def main():
     )
 
     logging.info('Finished. Figures saved to %s', PLOTS_DIR)
-
 
 if __name__ == '__main__':
     main()
