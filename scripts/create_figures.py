@@ -2189,7 +2189,7 @@ def main():
         save_path=PLOTS_DIR / "maps_best_model_qw_pcrps_99_vs_era5.png",
     )
 
-    logging.info("Saving maps_sig_best_model_ai_qw_pcrps_monthly_max_vs_era5.png")
+    logging.info("Saving maps_sig_best_model_ai_qw_pcrps_99_vs_era5.png")
     plot_significant_best_model_maps(
         pairwise_p_values=pairwise_p_values_era5,
         model_order=["HRES", "PW-ERA5", "GC-ERA5", "FuXi"],
@@ -2197,7 +2197,7 @@ def main():
         quantile=0.99,
         include_ai_better=True,
         legend_fontsize=21,
-        save_path=PLOTS_DIR / "maps_sig_best_model_ai_qw_pcrps_monthly_max_vs_era5.png",
+        save_path=PLOTS_DIR / "maps_sig_best_model_ai_qw_pcrps_99_vs_era5.png",
     )
 
     logging.info('Finished. Figures saved to %s', PLOTS_DIR)
