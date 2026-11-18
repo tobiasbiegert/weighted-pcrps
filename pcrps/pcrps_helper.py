@@ -160,9 +160,9 @@ def get_easyuq_tasks(
 
     return tasks
 
-def _fit_easyuq(y, preds_point_df):
+def _fit_easyuq(y, preds_point_df, evaluation_forecasts=None):
     """
-    Fit IDR and extract its in-sample predictive distributions, recording fitting time.
+    Fit IDR and extract predictive distributions, recording fitting and prediction time.
 
     Parameters
     ----------
@@ -170,6 +170,8 @@ def _fit_easyuq(y, preds_point_df):
         Outcomes corresponding to the supplied forecasts. These may be original outcomes or transformed threshold-relative outcomes.
     preds_point_df : pandas.DataFrame, shape (n, 1)
         Original or transformed deterministic forecasts for one grid point and lead time. Rows must correspond to the entries in y.
+    evaluation_forecasts : pandas.DataFrame, optional
+        Optional forecast DataFrame at which to predict, defaulting to the fitting forecasts.
 
     Returns
     -------
@@ -180,12 +182,14 @@ def _fit_easyuq(y, preds_point_df):
     w : list of numpy.ndarray
         Probability masses at the support points.
     elapsed : numpy.float32
-        Elapsed wall-clock time in seconds for fitting IDR, obtaining the in-sample distributions, and extracting their arrays.
+        Elapsed wall-clock time in seconds for fitting IDR, predicting, and extracting their arrays.
     """
     start_time = time.time()
 
     fitted_idr = idr(y, preds_point_df)
-    predictions = fitted_idr.predict(preds_point_df, digits=8).predictions
+    if evaluation_forecasts is None:
+        evaluation_forecasts = preds_point_df
+    predictions = fitted_idr.predict(evaluation_forecasts, digits=8).predictions
 
     x = list(map(get_points, predictions))
     p = list(map(get_cdf, predictions))
@@ -194,7 +198,7 @@ def _fit_easyuq(y, preds_point_df):
     elapsed = np.float32(time.time() - start_time)
     return x, p, w, elapsed
 
-def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, quantiles=None, compute_tw=False, thresholds=None, compute_pcrps=True):
+def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, quantiles=None, compute_tw=False, thresholds=None, compute_pcrps=True, fit_preds=None, fit_obs=None, monthly_record_thresholds=None):
     """
     Fit EasyUQ at each latitude/longitude point and compute the requested scores.
 
@@ -226,6 +230,13 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
     compute_pcrps : bool, optional
         If True (the default), compute ordinary PCRPS. If False, the original
         fit is still calculated when required for qwPCRPS or fixed thresholds.
+    fit_preds : xarray.DataArray, optional
+        Forecasts used to fit EasyUQ. Supply together with fit_obs. If both are omitted, EasyUQ is fitted to preds and obs.
+    fit_obs : xarray.DataArray, optional
+        Observations paired with fit_preds at their verification times.
+    monthly_record_thresholds : xarray.DataArray, optional
+        Monthly record thresholds indexed by calendar month, threshold label, latitude, and longitude.
+        Required when scoring monthly records with a separate fitting sample.
 
     Returns
     -------
@@ -233,6 +244,10 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
         Dataset containing the requested scores for each grid point and forecast
         initialization time, together with corresponding fitting and evaluation times.
     """
+    out_of_sample = fit_preds is not None or fit_obs is not None
+    if out_of_sample and (fit_preds is None or fit_obs is None):
+        raise ValueError('Supply fit_preds and fit_obs together')
+
     tasks = get_easyuq_tasks(
         compute_pcrps=compute_pcrps,
         compute_qw=compute_qw,
@@ -246,6 +261,11 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
             j for j, name in enumerate(threshold_names)
             if name not in ('monthly_min', 'monthly_max')
         ]
+        has_monthly_records = (
+            'monthly_min' in threshold_names or 'monthly_max' in threshold_names
+        )
+        if out_of_sample and has_monthly_records and monthly_record_thresholds is None:
+            raise ValueError('Supply monthly_record_thresholds for monthly record scores')
 
     # Initialize an empty list to store the datasets for each grid point
     pcrps_datasets = []
@@ -270,6 +290,23 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
             if len(y) != len(preds_point_df):
                 raise ValueError('obs must have the same length as the forecasts')
 
+            # Use the evaluation pairs for fitting unless historical pairs are supplied.
+            fit_preds_point_df, fit_y = preds_point_df, y
+            if out_of_sample:
+                fit_point = fit_preds.sel(latitude=lat, longitude=lon, prediction_timedelta=lead_time)
+                fit_preds_point_df = fit_point.to_dataframe()[[var]]
+                # Match historical forecasts to observations at their verification times.
+                fit_valid_time = fit_point.time + lead_time
+                fit_y = fit_obs.sel(latitude=lat, longitude=lon, time=fit_valid_time).values
+
+                # Apply the observation checks to the historical fitting sample.
+                if fit_y.ndim != 1:
+                    raise ValueError('fit_y must be a 1-D array')
+                if not np.all(np.isfinite(fit_y)):
+                    raise ValueError('fit_y contains non-finite values')
+                if len(fit_y) != len(fit_preds_point_df):
+                    raise ValueError('fit_y must have the same length as the fitting forecasts')
+
             # Expand dimensions
             expand_dims = {
                 'longitude': [lon],
@@ -284,7 +321,7 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
 
             # Fit IDR once for all scores that use the original pairs
             if 'idr_time' in tasks:
-                x, p, w, idr_time = _fit_easyuq(y, preds_point_df)
+                x, p, w, idr_time = _fit_easyuq(fit_y, fit_preds_point_df, evaluation_forecasts=preds_point_df)
                 timings['idr_time'] = idr_time
 
             # PCRPS
@@ -351,7 +388,26 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
                     transformed_preds_df = preds_point_df.copy()
                     transformed_preds_df[var] = x_tilde
 
-                    x_tw, p_tw, w_tw, idr_time_tw = _fit_easyuq(y_tilde, transformed_preds_df)
+                    # Use the transformed evaluation pairs for fitting in sample.
+                    fit_transformed_preds_df, fit_y_tilde = transformed_preds_df, y_tilde
+                    if out_of_sample:
+                        # Look up the same monthly records for the historical verification dates.
+                        fit_t_i = monthly_record_thresholds.sel(latitude=lat, longitude=lon, threshold=threshold_name, month=fit_valid_time.dt.month).values
+                        fit_t_i = np.asarray(fit_t_i, dtype=np.float64)
+                        fit_forecast = fit_preds_point_df[var].to_numpy(dtype=np.float64)
+
+                        # Apply the same monthly record transformation to the fitting pairs.
+                        if threshold_name == 'monthly_min':
+                            fit_x_tilde = fit_t_i - fit_forecast
+                            fit_y_tilde = fit_t_i - np.asarray(fit_y, dtype=np.float64)
+                        else:
+                            fit_x_tilde = fit_forecast - fit_t_i
+                            fit_y_tilde = np.asarray(fit_y, dtype=np.float64) - fit_t_i
+
+                        fit_transformed_preds_df = fit_preds_point_df.copy()
+                        fit_transformed_preds_df[var] = fit_x_tilde
+
+                    x_tw, p_tw, w_tw, idr_time_tw = _fit_easyuq(fit_y_tilde, fit_transformed_preds_df, evaluation_forecasts=transformed_preds_df)
                     timings[f'{threshold_name}_idr_time'] = idr_time_tw
 
                     # Evaluate the transformed distributions at threshold zero
@@ -383,9 +439,6 @@ def compute_easyuq(preds, obs, var, lead_time, level=None, compute_qw=False, qua
             vars_dict[f'{var}_time'] = time_da
 
             pcrps_datasets.append(xr.Dataset(vars_dict))
-
-    # # Merge datasets
-    # pcrps_dataset = xr.merge(pcrps_datasets)
 
     # Concatenate grid-point datasets along the spatial dimensions
     n_lon = preds.sizes["longitude"]

@@ -851,6 +851,7 @@ def plot_tw_pcrps_panels(
     legend_fontsize=20,
     save_path=None,
     save_dpi=300,
+    out_of_sample=False,
 ):
     if ground_truth not in {"era5", "ifs_analysis"}:
         raise ValueError("ground_truth must be 'era5' or 'ifs_analysis'.")
@@ -866,6 +867,8 @@ def plot_tw_pcrps_panels(
             ("2m_temperature", threshold_opposite),
             ("total_precipitation_24hr", threshold),
         ]
+        if out_of_sample:
+            panels = panels[:-1]
 
     else:  # ifs_analysis
         panels = [
@@ -902,13 +905,14 @@ def plot_tw_pcrps_panels(
             else:
                 y = tw.values
 
+            is_oos = label.endswith(" (out of sample)")
             line_kwargs = dict(
                 color=color,
-                label=label,
+                label=None if is_oos else label,
                 **plot_kwargs,
             )
 
-            if label == "ERA5 Climatology":
+            if is_oos:
                 line_kwargs["linestyle"] = "--"
 
             ax.plot(
@@ -923,7 +927,8 @@ def plot_tw_pcrps_panels(
         ax.set_ylim(0)
         ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0), useMathText=True)
         ax.yaxis.get_offset_text().set_fontsize(tick_fontsize)
-        ax.set_ylabel(f"Latitude-weighted twPCRPS {get_unit(var)}", fontsize=label_fontsize)
+        score_label = "twPCRPS and twCRPS" if out_of_sample else "Latitude-weighted twPCRPS"
+        ax.set_ylabel(f"{score_label} {get_unit(var)}", fontsize=label_fontsize)
         ax.tick_params(axis="both", which="major", labelsize=tick_fontsize)
 
     for ax in flat_axes[n_panels:]:
@@ -962,35 +967,45 @@ def plot_tw_pcrps_skill_by_threshold(
     ylim_map=None,
     save_path=None,
     save_dpi=300,
+    reference_map=None,
 ):
     """
-    Plot twPCRPS skill score curves over threshold quantiles for several lead times.
+    Plot twPCRPS skill scores or relative in-sample/out-of-sample score gaps.
 
     Parameters
     ----------
+    forecast_map : dict
+        Model labels mapped to (colour, latitude-weighted mean score dataset).
+    reference_ds : xarray.Dataset
+        Shared reference for the pcrps0 and climatology comparisons.
+        Supplies variables, thresholds and lead times for all comparisons.
     ground_truth : {"era5", "ifs_analysis"}
-        Ground truth dataset.
-    skill_reference : {"pcrps0", "climatology"}
+        Verification dataset.
+    skill_reference : {"pcrps0", "climatology", "out_of_sample"}
         Denominator used in the skill score:
         - "pcrps0": 1 - forecast / pcrps0
         - "climatology": 1 - forecast / climatology
-        The climatology reference is available only for ERA5.
+        - "out_of_sample": 1 - in-sample twPCRPS / out-of-sample twCRPS
+        The climatology and out-of-sample references are available only for ERA5.
     tail : {"upper", "lower", "both"}
         Which skill curves to plot.
         - "upper": plot only upper-tail skill (solid)
         - "lower": plot only lower-tail skill (dashed), only for MSLP and T2M
         - "both": plot upper for all variables and lower only for MSLP and T2M
+    reference_map : dict, optional
+        Model labels matching forecast_map, mapped to latitude-weighted mean
+        out-of-sample score datasets. Required for out_of_sample.
     """
     if ground_truth not in {"era5", "ifs_analysis"}:
         raise ValueError("ground_truth must be 'era5' or 'ifs_analysis'.")
-    if skill_reference not in {"pcrps0", "climatology"}:
-        raise ValueError("skill_reference must be 'pcrps0' or 'climatology'.")
+    if skill_reference not in {"pcrps0", "climatology", "out_of_sample"}:
+        raise ValueError("skill_reference must be 'pcrps0', 'climatology', or 'out_of_sample'.")
     if tail not in {"upper", "lower", "both"}:
         raise ValueError("tail must be 'upper', 'lower', or 'both'.")
-    if ground_truth == "ifs_analysis" and skill_reference == "climatology":
-        raise ValueError(
-            "The climatology reference is available only for ground_truth='era5'."
-        )
+    if ground_truth == "ifs_analysis" and skill_reference != "pcrps0":
+        raise ValueError(f"The {skill_reference} reference is available only for ground_truth='era5'.")
+    if skill_reference == "out_of_sample" and reference_map is None:
+        raise ValueError("Provide reference_map for the out-of-sample comparison.")
 
     lower_tail_vars = {"mean_sea_level_pressure", "2m_temperature"}
 
@@ -1011,7 +1026,12 @@ def plot_tw_pcrps_skill_by_threshold(
     lead_times = reference_ds["prediction_timedelta"].values
 
     if ylim_map is None:
-        if skill_reference == "pcrps0":
+        if skill_reference == "out_of_sample":
+            ylim_map = {
+                int(lt / np.timedelta64(1, "D")): (0, 1)
+                for lt in lead_times
+            }
+        elif skill_reference == "pcrps0":
             ylim_map = {
                 1: (0.6, 1),
                 3: (0.3, 1),
@@ -1056,9 +1076,13 @@ def plot_tw_pcrps_skill_by_threshold(
                 ):
                     continue
 
+                model_reference_ds = reference_ds
+                if skill_reference == "out_of_sample":
+                    model_reference_ds = reference_map[label]
+
                 if tail in {"upper", "both"}:
                     upper_skill = get_upper_skill_score_data(
-                        ds, reference_ds, var, "tw_pcrps"
+                        ds, model_reference_ds, var, "tw_pcrps"
                     )
 
                     ax.plot(
@@ -1074,7 +1098,7 @@ def plot_tw_pcrps_skill_by_threshold(
 
                 if tail in {"lower", "both"} and var in lower_tail_vars:
                     lower_skill = get_lower_skill_score_data(
-                        ds, reference_ds, var, "tw_pcrps"
+                        ds, model_reference_ds, var, "tw_pcrps"
                     )
 
                     lower_label = label if tail == "lower" else None
@@ -1102,7 +1126,9 @@ def plot_tw_pcrps_skill_by_threshold(
                 )
 
             if j == 0:
-                if tail == "upper":
+                if skill_reference == "out_of_sample":
+                    ylabel = "Relative score gap"
+                elif tail == "upper":
                     ylabel = "latitude-weighted upper twPCRPS-S"
                     if skill_reference == "climatology":
                         ylabel = "latitude-weighted upper twPCRPS skill"
@@ -1179,10 +1205,10 @@ def compute_correlations(ens_stacked, det_stacked, lead_times):
 
 
 def plot_tw_scatter_grid(
-    det_ds,
-    ens_crps_ds,
-    ens_tw_ds,
-    thresholds,
+    det_ds=None,
+    ens_crps_ds=None,
+    ens_tw_ds=None,
+    thresholds=None,
     ground_truth="era5",
     comparison="ifs",
     title_fontsize=26,
@@ -1193,12 +1219,13 @@ def plot_tw_scatter_grid(
     scientific=True,
     save_path=None,
     save_dpi=300,
+    oos_pairs=None,
 ):
     if ground_truth not in {"era5", "ifs_analysis"}:
         raise ValueError("ground_truth must be 'era5' or 'ifs_analysis'.")
     if comparison not in {"ifs", "gencast"}:
         raise ValueError("comparison must be 'ifs' or 'gencast'.")
-    if len(thresholds) == 0:
+    if thresholds is None or len(thresholds) == 0:
         raise ValueError("thresholds must be a non-empty list.")
 
     lower_flags = [is_lower_half(th) for th in thresholds]
@@ -1207,7 +1234,16 @@ def plot_tw_scatter_grid(
 
     lower_tail = lower_flags[0]
 
-    if comparison == "ifs":
+    rows = thresholds
+
+    if oos_pairs is not None:
+        if len(thresholds) != 1:
+            raise ValueError("Use one threshold per out-of-sample scatterplot.")
+        rows = list(oos_pairs)
+        det_ds = oos_pairs[rows[0]][0]
+        x_label = "twPCRPS"
+        y_label = "twCRPS"
+    elif comparison == "ifs":
         x_label = "IFS HRES twPCRPS"
         y_label = "IFS ENS twCRPS"
     else:
@@ -1218,13 +1254,13 @@ def plot_tw_scatter_grid(
 
     if not lower_tail:
         variables.append("10m_wind_speed")
-        if ground_truth == "era5":
+        if ground_truth == "era5" and oos_pairs is None:
             variables.append("total_precipitation_24hr")
 
     lead_times = det_ds["prediction_timedelta"].values
     lead_time_days = [int(lt / np.timedelta64(1, "D")) for lt in lead_times]
 
-    n_rows = len(thresholds)
+    n_rows = len(rows)
     n_cols = len(variables)
 
     fig, axes = plt.subplots(
@@ -1237,29 +1273,38 @@ def plot_tw_scatter_grid(
     standard_colors = ["tab:blue", "tab:orange", "tab:green", "tab:red", "tab:purple"]
     lead_to_color = dict(zip(lead_time_days, standard_colors))
 
-    for i, threshold in enumerate(thresholds):
+    for i, row in enumerate(rows):
+        if oos_pairs is None:
+            threshold = row
+        else:
+            threshold = thresholds[0]
+            in_ds, out_ds = oos_pairs[row]
+
         for j, var in enumerate(variables):
             ax = axes[i, j]
 
-            det_score = get_tw_pcrps_data(det_ds, var, threshold)
-            ens_tw = ens_tw_ds[var].sel(threshold=threshold)
-
-            if lower_tail:
-                ens_score = ens_crps_ds[var] - ens_tw
+            if oos_pairs is None:
+                x_score = get_tw_pcrps_data(det_ds, var, threshold)
+                y_score = ens_tw_ds[var].sel(threshold=threshold)
+                if lower_tail:
+                    y_score = ens_crps_ds[var] - y_score
+                panel_title = f"{get_title(var)} – {format_threshold_label(threshold)}"
             else:
-                ens_score = ens_tw
+                x_score = get_tw_pcrps_data(in_ds, var, threshold)
+                y_score = get_tw_pcrps_data(out_ds, var, threshold)
+                panel_title = f"{row} – {get_title(var)}"
 
-            det_stacked = det_score.stack(points=("prediction_timedelta", "latitude", "longitude"))
-            ens_stacked = ens_score.stack(points=("prediction_timedelta", "latitude", "longitude"))
-            ens_aligned, det_aligned = xr.align(ens_stacked, det_stacked, join="inner")
+            x_stacked = x_score.stack(points=("prediction_timedelta", "latitude", "longitude"))
+            y_stacked = y_score.stack(points=("prediction_timedelta", "latitude", "longitude"))
+            y_aligned, x_aligned = xr.align(y_stacked, x_stacked, join="inner")
 
             pearson_all, spearman_all, pearson_by_lt, spearman_by_lt = compute_correlations(
-                ens_aligned, det_aligned, lead_times
+                y_aligned, x_aligned, lead_times
             )
 
-            x = det_aligned.values
-            y = ens_aligned.values
-            point_lead_days = det_aligned["prediction_timedelta"].dt.days.values
+            x = x_aligned.values
+            y = y_aligned.values
+            point_lead_days = x_aligned["prediction_timedelta"].dt.days.values
             point_colors = np.array([lead_to_color[int(lt)] for lt in point_lead_days])
 
             ax.scatter(
@@ -1276,10 +1321,7 @@ def plot_tw_scatter_grid(
 
             ax.set_xlabel(f"{x_label} {get_unit(var)}", fontsize=label_fontsize)
             ax.set_ylabel(f"{y_label} {get_unit(var)}", fontsize=label_fontsize)
-            ax.set_title(
-                f"{get_title(var)} – {format_threshold_label(threshold)}",
-                fontsize=title_fontsize,
-            )
+            ax.set_title(panel_title, fontsize=title_fontsize)
             ax.tick_params(axis="both", which="major", labelsize=tick_fontsize)
 
             if scientific:
@@ -1375,7 +1417,10 @@ def plot_tw_scatter_grid(
         columnspacing=1,
     )
 
-    plt.tight_layout(rect=[0, 0.045, 1, 1])
+    if oos_pairs is None:
+        plt.tight_layout(rect=[0, 0.045, 1, 1])
+    else:
+        plt.tight_layout(rect=[0, 0.065, 1, 1], w_pad=2.0)
     fig.subplots_adjust(hspace=0.25)
 
     if save_path is not None:
@@ -1913,9 +1958,14 @@ def main():
     fuxi_vs_era5_pcrps = xr.open_zarr(f"{RESULTS_DIR}/fuxi_240x121_vs_era5.zarr", decode_timedelta=True)[list(era5_pcrps0.data_vars)]
     era5_climatology_vs_era5_pcrps = xr.open_zarr(f"{RESULTS_DIR}/era5_climatology_240x121_vs_era5.zarr", decode_timedelta=True)[list(era5_pcrps0.data_vars)]
 
+    # Operational scores
     hres_vs_ifs_analysis_pcrps = xr.open_zarr(f"{RESULTS_DIR}/hres_240x121_vs_ifs_analysis.zarr", decode_timedelta=True)[list(ifs_analysis_pcrps0.data_vars)]
     pangu_operational_vs_ifs_analysis_pcrps = xr.open_zarr(f"{RESULTS_DIR}/pangu_operational_240x121_vs_ifs_analysis.zarr", decode_timedelta=True)[list(ifs_analysis_pcrps0.data_vars)]
     graphcast_operational_vs_ifs_analysis_pcrps = xr.open_zarr(f"{RESULTS_DIR}/graphcast_operational_240x121_vs_ifs_analysis.zarr", decode_timedelta=True)[list(ifs_analysis_pcrps0.data_vars)]
+
+    # Out-of-sample scores
+    hres_vs_era5_crps_oos = xr.open_zarr(f"{RESULTS_DIR}/hres_240x121_vs_era5_oos.zarr", decode_timedelta=True)[list(ifs_analysis_pcrps0.data_vars)]
+    pangu_vs_era5_crps_oos = xr.open_zarr(f"{RESULTS_DIR}/pangu_240x121_vs_era5_oos.zarr", decode_timedelta=True)[list(ifs_analysis_pcrps0.data_vars)]
 
     logging.info('Computing latitude-weighted spatial averages.')
     with ProgressBar():
@@ -1931,6 +1981,9 @@ def main():
         hres_vs_ifs_analysis_pcrps_spatial_avg = _spatial_average(hres_vs_ifs_analysis_pcrps, region=None, skipna=False).load()
         pangu_operational_vs_ifs_analysis_pcrps_spatial_avg = _spatial_average(pangu_operational_vs_ifs_analysis_pcrps, region=None, skipna=False).load()
         graphcast_operational_vs_ifs_analysis_pcrps_spatial_avg = _spatial_average(graphcast_operational_vs_ifs_analysis_pcrps, region=None, skipna=False).load()
+
+        hres_vs_era5_crps_oos_spatial_avg = _spatial_average(hres_vs_era5_crps_oos, region=None, skipna=False).load()
+        pangu_vs_era5_crps_oos_spatial_avg = _spatial_average(pangu_vs_era5_crps_oos, region=None, skipna=False).load()
 
     # Load data for the maps.
     reduced_thresholds = ['q099', 'monthly_max']
@@ -1948,6 +2001,9 @@ def main():
         hres_vs_ifs_analysis_pcrps_maps = hres_vs_ifs_analysis_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
         pangu_operational_vs_ifs_analysis_pcrps_maps = pangu_operational_vs_ifs_analysis_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
         graphcast_operational_vs_ifs_analysis_pcrps_maps = graphcast_operational_vs_ifs_analysis_pcrps.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
+
+        hres_vs_era5_crps_oos_maps = hres_vs_era5_crps_oos.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
+        pangu_vs_era5_crps_oos_maps = pangu_vs_era5_crps_oos.sel(quantile=reduced_quantiles, threshold=reduced_thresholds).load()
 
         fuxi_graphcast_vs_era5_p = xr.open_zarr(f"{RESULTS_DIR}/tests/fuxi_graphcast_vs_era5_p.zarr", decode_timedelta=True).load()
         fuxi_pangu_vs_era5_p = xr.open_zarr(f"{RESULTS_DIR}/tests/fuxi_pangu_vs_era5_p.zarr", decode_timedelta=True).load()
@@ -1994,6 +2050,18 @@ def main():
         "HRES": ("tab:blue", hres_vs_ifs_analysis_pcrps_spatial_avg),
         "PW-IFS": ("tab:orange", pangu_operational_vs_ifs_analysis_pcrps_spatial_avg),
         "GC-IFS": ("tab:green", graphcast_operational_vs_ifs_analysis_pcrps_spatial_avg),
+    }
+
+    oos_panel_datasets = {
+        "HRES": era5_forecast_map["HRES"],
+        "HRES (out of sample)": ("tab:blue", hres_vs_era5_crps_oos_spatial_avg),
+        "PW-ERA5": era5_forecast_map["PW-ERA5"],
+        "PW-ERA5 (out of sample)": ("tab:orange", pangu_vs_era5_crps_oos_spatial_avg),
+    }
+
+    oos_scatter_pairs = {
+        "PW-ERA5": (pangu_vs_era5_pcrps_maps, pangu_vs_era5_crps_oos_maps),
+        "HRES": (hres_vs_era5_pcrps_maps, hres_vs_era5_crps_oos_maps),
     }
 
     # Main paper
@@ -2132,6 +2200,40 @@ def main():
         ground_truth="era5",
         comparison="ifs",
         save_path=PLOTS_DIR / "scatterplot_nwp_tw_crps_vs_era5.png",
+    )
+
+    logging.info("Saving scatterplot_oos_tw_crps_q099_vs_era5.png")
+    plot_tw_scatter_grid(
+        thresholds=["q099"],
+        ground_truth="era5",
+        oos_pairs=oos_scatter_pairs,
+        save_path=PLOTS_DIR / "scatterplot_oos_tw_crps_q099_vs_era5.png",
+    )
+
+    logging.info("Saving tw_pcrps_q099_vs_era5_oos.pdf")
+    plot_tw_pcrps_panels(
+        dataset_map=oos_panel_datasets,
+        threshold="q099",
+        ground_truth="era5",
+        out_of_sample=True,
+        save_path=PLOTS_DIR / "tw_pcrps_q099_vs_era5_oos.pdf",
+    )
+
+    logging.info("Saving tw_pcrpss_vs_era5_oos.pdf")
+    plot_tw_pcrps_skill_by_threshold(
+        forecast_map={
+            "HRES": era5_forecast_map["HRES"],
+            "PW-ERA5": era5_forecast_map["PW-ERA5"],
+        },
+        reference_ds=hres_vs_era5_crps_oos_spatial_avg,
+        reference_map={
+            "HRES": hres_vs_era5_crps_oos_spatial_avg,
+            "PW-ERA5": pangu_vs_era5_crps_oos_spatial_avg,
+        },
+        ground_truth="era5",
+        skill_reference="out_of_sample",
+        tail="both",
+        save_path=PLOTS_DIR / "tw_pcrpss_vs_era5_oos.pdf",
     )
 
     # Supplement

@@ -25,6 +25,16 @@ TARGET_PATH = flags.DEFINE_string(
     None,
     help='Path to ground-truth to evaluate in Zarr format',
 )
+FIT_PREDICTION_PATH = flags.DEFINE_string(
+    'fit_prediction_path',
+    None,
+    help='Path to historical forecasts for fitting EasyUQ in Zarr format',
+)
+FIT_TARGET_PATH = flags.DEFINE_string(
+    'fit_target_path',
+    None,
+    help='Path to historical observations for fitting EasyUQ in Zarr format',
+)
 TIME_START = flags.DEFINE_string(
     'time_start',
     None,
@@ -140,7 +150,7 @@ VARIABLE_LEVEL_MAPPING = {
     'wind_speed': 850
 }
 
-def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=None, skip_non_headline=True, compute_qw=False, quantiles=None, compute_tw=False, thresholds=None):
+def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=None, skip_non_headline=True, compute_qw=False, quantiles=None, compute_tw=False, thresholds=None, fit_predictions=None, fit_targets=None, fit_times_by_lead=None, monthly_record_thresholds=None):
     """
     Compute PCRPS and optionally qwPCRPS and/or twPCRPS for a single chunk.
 
@@ -166,6 +176,14 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
         If True, also compute threshold-weighted PCRPS at the specified threshold levels.
     thresholds : xarray.Dataset or xarray.DataArray, optional
         Threshold data used for twPCRPS. Required if ``compute_tw`` is True.
+    fit_predictions : xarray.Dataset, optional
+        Historical forecasts used to fit EasyUQ.
+    fit_targets : xarray.Dataset, optional
+        Historical observations indexed by verification time.
+    fit_times_by_lead : dict, optional
+        Fitting initialisation times for each lead, selected by the verification time cutoff.
+    monthly_record_thresholds : xarray.Dataset, optional
+        Monthly record thresholds indexed by calendar month and threshold label.
 
     Returns
     -------
@@ -270,6 +288,27 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
     if compute_tw:
         threshold_chunk = thresholds.sel(time=valid_time, latitude=prediction_chunk.latitude, longitude=prediction_chunk.longitude)
 
+    def load_fit_inputs(level=None):
+        """Load the historical fitting pairs and monthly records for this chunk."""
+        if fit_predictions is None:
+            return None, None, None
+
+        selection = {'latitude': prediction_chunk.latitude, 'longitude': prediction_chunk.longitude}
+        if level is not None:
+            selection['level'] = level
+
+        fit_times = fit_times_by_lead[lead_time]
+        fit_preds = fit_predictions[var].sel(selection).sel(time=fit_times, prediction_timedelta=[lead_time]).compute()
+
+        # Match the fitting forecasts to observations at their verification times.
+        fit_obs = fit_targets[var].sel(selection).sel(time=fit_times + lead_time).compute()
+
+        fit_records = None
+        if monthly_record_thresholds is not None:
+            fit_records = monthly_record_thresholds[var].sel(selection).compute()
+
+        return fit_preds, fit_obs, fit_records
+
     if 'level' in prediction_chunk.dims:
         # Upper-level variable
         level = prediction_chunk.level.values[0]
@@ -354,8 +393,9 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
                 ts = threshold_chunk.sel(level=level)[var].compute()
             else:
                 ts = None
+            fit_preds, fit_obs, fit_records = load_fit_inputs(level=level)
             logging.info(f'Loading complete for {key}')
-            result_dataset = compute_easyuq(preds, obs, var, lead_time, level=level, compute_qw=compute_qw, quantiles=quantiles, compute_tw=compute_tw, thresholds=ts)
+            result_dataset = compute_easyuq(preds, obs, var, lead_time, level=level, compute_qw=compute_qw, quantiles=quantiles, compute_tw=compute_tw, thresholds=ts, fit_preds=fit_preds, fit_obs=fit_obs, monthly_record_thresholds=fit_records)
             logging.info(f'PCRPS results for {key}')
     else:
         # Surface variable
@@ -366,8 +406,9 @@ def compute_pcrps(key, prediction_chunk, targets=None, variable_level_mapping=No
             ts = threshold_chunk[var].compute()
         else:
             ts = None
+        fit_preds, fit_obs, fit_records = load_fit_inputs()
         logging.info(f'Loading complete for {key}')
-        result_dataset = compute_easyuq(preds, obs, var, lead_time, compute_qw=compute_qw, quantiles=quantiles, compute_tw=compute_tw, thresholds=ts)
+        result_dataset = compute_easyuq(preds, obs, var, lead_time, compute_qw=compute_qw, quantiles=quantiles, compute_tw=compute_tw, thresholds=ts, fit_preds=fit_preds, fit_obs=fit_obs, monthly_record_thresholds=fit_records)
         logging.info(f'PCRPS results for {key}')
 
     return key, result_dataset
@@ -480,6 +521,28 @@ def main(argv):
     tmax = predictions.time[-1] + predictions.prediction_timedelta.max()
     targets = xr.open_zarr(TARGET_PATH.value).sel(time=slice(tmin, tmax))[VARIABLES.value]
 
+    # Open historical forecasts and observations for a separate EasyUQ fit.
+    fit_predictions = None
+    fit_targets = None
+    fit_times_by_lead = None
+    if FIT_PREDICTION_PATH.value is not None or FIT_TARGET_PATH.value is not None:
+        if FIT_PREDICTION_PATH.value is None or FIT_TARGET_PATH.value is None:
+            raise ValueError('Supply --fit_prediction_path and --fit_target_path together')
+
+        fit_predictions = xr.open_zarr(FIT_PREDICTION_PATH.value, decode_timedelta=True)[VARIABLES.value]
+        fit_targets = xr.open_zarr(FIT_TARGET_PATH.value)[VARIABLES.value]
+
+        # Keep fitting pairs that verify before the first evaluation initialisation.
+        first_evaluation_time = predictions.time.values[0]
+        historical_times = fit_predictions.time.values
+        fit_times_by_lead = {}
+        for lead_time in predictions.prediction_timedelta.values:
+            fit_times = historical_times[historical_times + lead_time < first_evaluation_time]
+            if fit_times.size == 0:
+                raise ValueError(f'No fitting pairs before {first_evaluation_time} for lead {lead_time}')
+            fit_times_by_lead[lead_time] = fit_times
+            logging.info('Lead %g h: %d fitting initialisations', lead_time / np.timedelta64(1, 'h'), fit_times.size)
+
     # Decide which quantiles to use for qwPCRPS
     if QW_PCRPS.value:
         if QUANTILES.value:
@@ -490,6 +553,7 @@ def main(argv):
         quantiles = None
 
     thresholds = None
+    monthly_record_thresholds = None
     if TW_PCRPS.value:
         logging.info('Opening threshold datasets for twPCRPS.')
 
@@ -506,6 +570,7 @@ def main(argv):
             )
 
         threshold_pieces = []
+        monthly_records = []
 
         # Use verification times for monthly record-based thresholds
         months = targets.time.dt.month
@@ -514,6 +579,8 @@ def main(argv):
         if MONTHLY_MIN_RECORDS_PATH.value is not None:
             logging.info('Opening monthly min record thresholds.')
             rec_min = xr.open_zarr(MONTHLY_MIN_RECORDS_PATH.value)[VARIABLES.value]
+            if fit_predictions is not None:
+                monthly_records.append(rec_min.expand_dims(threshold=['monthly_min'], axis=-1))
             rec_min_thr = (
                 rec_min.sel(month=months)
                 .expand_dims(threshold=['monthly_min'], axis=-1)
@@ -534,6 +601,8 @@ def main(argv):
         if MONTHLY_MAX_RECORDS_PATH.value is not None:
             logging.info('Opening monthly max record thresholds.')
             rec_max = xr.open_zarr(MONTHLY_MAX_RECORDS_PATH.value)[VARIABLES.value]
+            if fit_predictions is not None:
+                monthly_records.append(rec_max.expand_dims(threshold=['monthly_max'], axis=-1))
             rec_max_thr = (
                 rec_max.sel(month=months)
                 .expand_dims(threshold=['monthly_max'], axis=-1)
@@ -543,6 +612,10 @@ def main(argv):
 
         # Concat different thresholds
         thresholds = xr.concat(threshold_pieces, dim='threshold')
+
+        # Keep the month lookup for matching records to the historical fitting dates.
+        if monthly_records:
+            monthly_record_thresholds = xr.concat(monthly_records, dim='threshold')
 
         # Validate the threshold labels once, before processing chunks
         threshold_names = thresholds.threshold.values.tolist()
@@ -718,7 +791,11 @@ def main(argv):
                 compute_qw=QW_PCRPS.value,
                 quantiles=quantiles,
                 compute_tw=TW_PCRPS.value,
-                thresholds=thresholds
+                thresholds=thresholds,
+                fit_predictions=fit_predictions,
+                fit_targets=fit_targets,
+                fit_times_by_lead=fit_times_by_lead,
+                monthly_record_thresholds=monthly_record_thresholds
             )
         )
         # Optionally also write selected individual scores from this computation
